@@ -27,7 +27,7 @@ void checkCuda(cudaError_t result, const char* const func, const char* const fil
 /**
  * @brief       Функция genes_gener(...) генерирует случайную область решения.
  *
- * @param[in]   d_gens указатель на массив генов, которые необходимо инициализировать;
+ * @param[in]   d_gens_val указатель на массив генов, которые необходимо инициализировать;
  * @param[in]   rand_state указатель на псевдослучайную последовательность;
  * @param[in]   gens_count количество генов в хромосоме.
  */
@@ -44,7 +44,7 @@ __global__ void rnd_genes_gener(gen* d_gens_val, curandState* rand_state, int ge
  *              популяции. Каждая хромосома инициализируется в отдельном t.x + b.x потоке.
  *
  * @param[in]   d_pop указатель на начальную популяцию;
- * @param[in]   d_gens указатель на область решений;
+ * @param[in]   d_gens_val указатель на область решений;
  * @param[in]   rand_state указатель на псевдослучайную последовательность.
  */
 __global__ void cudaPopgener(population* d_pop, gen* d_gens_val, curandState* rand_state)
@@ -102,6 +102,15 @@ void result_output(population* d_pop)
     std::clog << "\rDone.\n";
 }
 
+__global__ void d_gens_free(population* d_pop)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        for (int i = 0; i < d_pop->population_size; ++i) {
+            delete d_pop->parents[i].citieslist;
+        }
+    }
+}
+
 int main()
 {
     /**
@@ -121,9 +130,6 @@ int main()
     // Опеределение Cuda сетки.
     int threadsPerBlocks = 256;
     int blocksPerGrid = (POPULATION_SIZE + threadsPerBlocks - 1) / threadsPerBlocks;
-
-    //gen* d_gens_null;
-    //checkCudaErrors(cudaMallocManaged((void**)&d_gens_null, GENS_COUNT * sizeof(gen)));
 
     gen* d_gens_val;
     checkCudaErrors(cudaMallocManaged((void**)&d_gens_val, GENS_COUNT * sizeof(gen)));
@@ -180,9 +186,9 @@ int main()
     std::cerr << "took " << timer << " seconds.\n";
 
     // Очистка GPU.
+    d_gens_free<<<1,1>>>(d_pop);
     checkCudaErrors(cudaDeviceSynchronize());
     checkCudaErrors(cudaGetLastError());
-    checkCudaErrors(cudaFree(d_gens_val));
     checkCudaErrors(cudaFree(d_chroms));
     checkCudaErrors(cudaFree(d_pop));
     checkCudaErrors(cudaFree(d_rand_state));
