@@ -23,6 +23,26 @@ void checkCuda(cudaError_t result, const char* const func, const char* const fil
     }
 }
 
+/**
+ * @brief       Функция result_output(...) выводит результирующую популяцию в выходной поток.
+ *              Структура вывода:
+ *              chromosome_i_fit: [chromosome_i_gen_0, chromosome_i_gen_1, ... , chromosome_i_gen_j]
+ *
+ * @param[in]   d_pop результирующая популяция для вывода.
+ */
+void result_output(population* d_pop)
+{
+    std::cerr << "Result:\n";
+    for (int i = 0; i < d_pop->population_size; ++i) {
+        std::cerr << "* "; std::cout << d_pop->parents[i].get_fit() << " || " << d_pop->parents[i].sel_probability << '\n';
+        for (int j = 0; j < d_pop->parents[i].cities_count; ++j) {
+            std::cerr << "** "; std::cout << d_pop->parents[i].citieslist[j].id << ": "
+                << d_pop->parents[i].citieslist[j].get_point().x() << d_pop->parents[i].citieslist[j].get_point().y() << '\n';
+        }
+    }
+    std::clog << "\rDone.\n";
+}
+
 #define RND (curand_uniform_double(rand_state))
 /**
  * @brief       Функция genes_gener(...) генерирует случайную область решения.
@@ -70,44 +90,25 @@ __global__ void cudaFitness(population* d_pop)
     d_pop->parents[index].fitness();
 }
 
-void gatsp(population* d_pop, int max_iter_limit, int threadsPerBlocks, int blocksPerGrid)
+__host__ void gatsp(population* d_pop, int max_iter_limit, int threadsPerBlocks, int blocksPerGrid)
 {
     for (int iter = 0; iter < max_iter_limit; ++iter) {
         std::cerr << "Iteration: " << iter << ".\n";
 
-        std::cerr << "Start Fitnress.\n";
+        std::cerr << "Start fitnress.\n";
         cudaFitness<<<blocksPerGrid, threadsPerBlocks>>>(d_pop);
         checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
-    }
-}
 
-/**
- * @brief       Функция result_output(...) выводит результирующую популяцию в выходной поток.
- *              Структура вывода:
- *              chromosome_i_fit: [chromosome_i_gen_0, chromosome_i_gen_1, ... , chromosome_i_gen_j]
- *
- * @param[in]   d_pop результирующая популяция для вывода.
- */
-void result_output(population* d_pop)
-{
-    std::cerr << "Result:\n";
-    for (int i = 0; i < d_pop->population_size; ++i) {
-        std::cerr << "* "; std::cout << d_pop->parents[i].get_fit() << '\n';
-        for (int j = 0; j < d_pop->parents[i].cities_count; ++j) {
-            std::cerr << "** "; std::cout << d_pop->parents[i].citieslist[j].id << ": "
-                << d_pop->parents[i].citieslist[j].get_point().x() << d_pop->parents[i].citieslist[j].get_point().y() << '\n';
-        }
-    }
-    std::clog << "\rDone.\n";
-}
-
-__global__ void d_gens_free(population* d_pop)
-{
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        for (int i = 0; i < d_pop->population_size; ++i) {
-            delete d_pop->parents[i].citieslist;
-        }
+        std::cerr << "Start selection.\n";
+        double probability = std::rand() / RAND_MAX + 1.0;
+        int new_pop_size = d_pop->set_newpop_size(probability);
+        // Выделение унифицированной памяти для нового состояния популяции.
+        checkCudaErrors(cudaMallocManaged((void**)&d_pop->new_parents_state, new_pop_size*sizeof(chromosome)));
+        // Генерируем новое состояние популяции.
+        d_pop->roul_selection(probability);
+        checkCudaErrors(cudaGetLastError());
+        checkCudaErrors(cudaDeviceSynchronize());
     }
 }
 
@@ -146,7 +147,7 @@ int main()
 
     // Инициализация псевдослучайной последовательность для генерации начальной популяции.
     curandState* d_rand_state2;
-    checkCudaErrors(cudaMalloc((void**)&d_rand_state2, sizeof(curandState)));
+    checkCudaErrors(cudaMalloc((void**)&d_rand_state2, POPULATION_SIZE*sizeof(curandState)));
 
     // Формируем начальную популяцию.
     d_pop->parents = d_chroms;
@@ -186,10 +187,8 @@ int main()
     std::cerr << "took " << timer << " seconds.\n";
 
     // Очистка GPU.
-    d_gens_free<<<1,1>>>(d_pop);
-    checkCudaErrors(cudaDeviceSynchronize());
-    checkCudaErrors(cudaGetLastError());
-    checkCudaErrors(cudaFree(d_chroms));
+    checkCudaErrors(cudaFree(d_gens_val));
+    checkCudaErrors(cudaFree(d_pop->parents));
     checkCudaErrors(cudaFree(d_pop));
     checkCudaErrors(cudaFree(d_rand_state));
     checkCudaErrors(cudaFree(d_rand_state2));

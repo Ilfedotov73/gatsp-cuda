@@ -16,11 +16,11 @@ private:
 public:
     city* citieslist;
     int cities_count;
-    double fit_probability;
+    double sel_probability;
 
     __host__ __device__ cities() {}
     __host__ __device__ cities(city* citieslist, int cities_size) : fit(-1.0), citieslist(citieslist), cities_count(cities_size), 
-        fit_probability(0.0) {}
+        sel_probability(0.0) {}
 
     __host__ __device__ double get_fit() const { return fit; }
     
