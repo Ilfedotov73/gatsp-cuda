@@ -24,9 +24,10 @@ void checkCuda(cudaError_t result, const char* const func, const char* const fil
 }
 
 /**
- * @brief       Функция result_output(...) выводит результирующую популяцию в выходной поток.
+ * @brief       Функция result_output(...) выводит результирующую популяцию в выходной поток для отладки вывода.
  *              Структура вывода:
- *              chromosome_i_fit: [chromosome_i_gen_0, chromosome_i_gen_1, ... , chromosome_i_gen_j]
+ *              chromosome_i_fit || chromosome_i_sel_probability: 
+ *                  [chromosome_i_gen_0, chromosome_i_gen_1, ... , chromosome_i_gen_j]
  *
  * @param[in]   d_pop результирующая популяция для вывода.
  */
@@ -90,26 +91,13 @@ __global__ void cudaFitness(population* d_pop)
     d_pop->parents[index].fitness();
 }
 
-__host__ void gatsp(population* d_pop, int max_iter_limit, int threadsPerBlocks, int blocksPerGrid)
+__global__ void cudaCrossover(population* d_pop, curandState* rand_state)
 {
-    for (int iter = 0; iter < max_iter_limit; ++iter) {
-        std::cerr << "Iteration: " << iter << ".\n";
-
-        std::cerr << "Start fitnress.\n";
-        cudaFitness<<<blocksPerGrid, threadsPerBlocks>>>(d_pop);
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
-
-        std::cerr << "Start selection.\n";
-        double probability = std::rand() / RAND_MAX + 1.0;
-        int new_pop_size = d_pop->set_newpop_size(probability);
-        // Выделение унифицированной памяти для нового состояния популяции.
-        checkCudaErrors(cudaMallocManaged((void**)&d_pop->new_parents_state, new_pop_size*sizeof(chromosome)));
-        // Генерируем новое состояние популяции.
-        d_pop->roul_selection(probability);
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
-    }
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    if (index >= d_pop->new_population_size) { return; }
+    curand_init(1984, index, 0, &rand_state[index]);
+    curandState local_rand_state = rand_state[index];
+    d_pop->popcross(&local_rand_state, index);
 }
 
 int main()
@@ -149,6 +137,9 @@ int main()
     curandState* d_rand_state2;
     checkCudaErrors(cudaMalloc((void**)&d_rand_state2, POPULATION_SIZE*sizeof(curandState)));
 
+    //  Инициализация псевдослучайной последовательность для оператора кроссинговера;
+    curandState* d_rand_state3;
+
     // Формируем начальную популяцию.
     d_pop->parents = d_chroms;
     for (int i = 0; i < POPULATION_SIZE; ++i) {
@@ -163,6 +154,7 @@ int main()
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
+    // Генерация начальной популяции.
     std::cerr << "Generation of the initial population.\n";
     cudaPopgener<<<blocksPerGrid, threadsPerBlocks>>>(d_pop, d_gens_val, d_rand_state2);
     checkCudaErrors(cudaGetLastError());
@@ -175,7 +167,31 @@ int main()
     std::cerr << "Start gatsp in " << threadsPerBlocks << " threads and " << blocksPerGrid << " blocks.\n";
 
     start = clock();
-    gatsp(d_pop, MAX_ITERACTION_LIMIT, threadsPerBlocks, blocksPerGrid);
+    for (int iter = 0; iter < MAX_ITERACTION_LIMIT; ++iter) {
+        std::cerr << "Iteration: " << iter << ".\n";
+
+        std::cerr << "Start fitnress.\n";
+        cudaFitness<<<blocksPerGrid, threadsPerBlocks>>>(d_pop);
+        checkCudaErrors(cudaGetLastError());
+        checkCudaErrors(cudaDeviceSynchronize());
+
+        std::cerr << "Start selection.\n";
+        double probability = std::rand() / RAND_MAX + 1.0;
+        int new_pop_size = d_pop->set_roul_popsize(probability);
+        // Выделение унифицированной памяти для нового состояния популяции.
+        checkCudaErrors(cudaMallocManaged((void**)&d_pop->new_parents_state, new_pop_size * sizeof(chromosome)));
+        // Генерируем новое состояние популяции.
+        d_pop->roul_selection(probability);
+        checkCudaErrors(cudaDeviceSynchronize());
+
+        std::cerr << "Start crossover.\n";
+        d_pop->new_population_size = d_pop->population_size * d_pop->population_size;
+        checkCudaErrors(cudaMallocManaged((void**)&d_rand_state3, d_pop->new_population_size*sizeof(curandState)));
+        blocksPerGrid = (d_pop ->new_population_size + threadsPerBlocks - 1) / threadsPerBlocks;
+        cudaCrossover<<<blocksPerGrid, threadsPerBlocks>>>(d_pop, d_rand_state3);
+        checkCudaErrors(cudaGetLastError());
+        checkCudaErrors(cudaDeviceSynchronize());
+    }
     stop = clock();
 
     // Вывод результата.
@@ -192,5 +208,6 @@ int main()
     checkCudaErrors(cudaFree(d_pop));
     checkCudaErrors(cudaFree(d_rand_state));
     checkCudaErrors(cudaFree(d_rand_state2));
+    checkCudaErrors(cudaFree(d_rand_state3));
     cudaDeviceReset();
 }

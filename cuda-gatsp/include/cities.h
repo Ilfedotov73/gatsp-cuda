@@ -92,23 +92,22 @@ using chromosome = cities;
  * 
  * @param[in]   parent1 -- хромосома первого родителя;
  * @param[in]   parent2 -- хромосома второго родителя;
- * @param[in]   local_rand_state -- указатель на псевдослучайную последовательность на __device__.
+ * @param[in]   local_rand_state -- указатель на псевдослучайную последовательность на __device__;
+ * @param[in]   chromosome_size -- размер хромосомы.
  * 
  * @details     Функция cudaCrossover(...) создает новый объект типа chromosome -- child, затем выбираются 
- *              случайные точки разреза (важно чтобы rand_point2 был строго больше, чем rand_point2), и  
+ *              случайные точки разреза (важно чтобы rand_point2 был строго больше, чем rand_point1), и  
  *              наконец происходит обмен генами.
  * 
  * @return      chromosome -- хромосома потомка.
  */
-__device__ inline chromosome cudaCrossover(const chromosome& parent1, const chromosome& parent2, curandState* local_rand_state) 
+__device__ inline chromosome crossover(const chromosome& parent1, const chromosome& parent2, curandState* local_rand_state) 
 {
     chromosome child = parent1;
-    int rand_point1 = std::floor(curand_uniform(local_rand_state));
-    int rand_point2 = std::floor(curand_uniform(local_rand_state));
-    for (;rand_point1 >= rand_point2;) { rand_point2 = std::floor(curand_uniform(local_rand_state)); }
-    for (int p = rand_point1 + 1; p < rand_point2; ++p) {
-        child.citieslist[p] = parent2.citieslist[p];       
-    }
+    int rand_point1 = (int)(curand_uniform(local_rand_state) * child.cities_count);
+    int rand_point2 = (int)(curand_uniform(local_rand_state) * child.cities_count);
+    for (;rand_point1 >= rand_point2;) { rand_point2 += 1; }
+    for (int p = rand_point1; p < rand_point2; ++p) { child.citieslist[p] = parent2.citieslist[p]; }
     return child;
 } 
 
