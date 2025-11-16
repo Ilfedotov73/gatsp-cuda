@@ -32,7 +32,7 @@ public:
      * 
      * @param[in]   genes список генов для задания хромососы;
      * @param[in]   first_gen из условия задачи "tsp" для хромосомы должен быть задан первый ген;
-     * @param[in]   rand_state указатель на псевдослучайную последовательность на __device__.
+     * @param[in]   local_rand_state указатель на псевдослучайную последовательность на __device__.
      * 
      * @details     Функция cities::cudaGenerated(...) записывает гены в хромососу в случайном параядке:
      *              во-первых, из условия задачи tsp, необходимо указать точку старта, т.е. записать в 
@@ -70,13 +70,14 @@ public:
      *              случайных генов местами.
      * 
      * @param[in]   local_rand_state -- указатель на псевдослучайную последовательность на __device__.
-     * @todo        local_rand_state -- должен находиться в диапазоне [0,7)
      */
-    __device__ void cudaMutation(curandState* local_rand_state) 
+    __device__ void mutation(curandState* local_rand_state) 
     {
-        int rand_idx1 = std::floor(curand_uniform(local_rand_state));
-        int rand_idx2 = std::floor(curand_uniform(local_rand_state));
+        int rand_idx1 = (int)(curand_uniform(local_rand_state)*cities_count);
+        int rand_idx2 = (int)(curand_uniform(local_rand_state)*cities_count);
     
+        for (; rand_idx1 == rand_idx2;) { rand_idx2 += 1; }
+
         gen tempptr = citieslist[rand_idx1];
         citieslist[rand_idx1] = citieslist[rand_idx2];
         citieslist[rand_idx2] = tempptr;

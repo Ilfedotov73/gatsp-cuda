@@ -29,7 +29,7 @@ void checkCuda(cudaError_t result, const char* const func, const char* const fil
  *              chromosome_i_fit || chromosome_i_sel_probability: 
  *                  [chromosome_i_gen_0, chromosome_i_gen_1, ... , chromosome_i_gen_j]
  *
- * @param[in]   d_pop результирующая популяция для вывода.
+ * @param[in]   d_pop -- результирующая популяция для вывода.
  */
 void result_output(population* d_pop)
 {
@@ -48,9 +48,9 @@ void result_output(population* d_pop)
 /**
  * @brief       Функция genes_gener(...) генерирует случайную область решения.
  *
- * @param[in]   d_gens_val указатель на массив генов, которые необходимо инициализировать;
- * @param[in]   rand_state указатель на псевдослучайную последовательность;
- * @param[in]   gens_count количество генов в хромосоме.
+ * @param[in]   d_gens_val -- указатель на массив генов, которые необходимо инициализировать;
+ * @param[in]   rand_state -- указатель на псевдослучайную последовательность;
+ * @param[in]   gens_count -- количество генов в хромосоме.
  */
 __global__ void rnd_genes_gener(gen* d_gens_val, curandState* rand_state, int gens_count)
 {
@@ -64,9 +64,9 @@ __global__ void rnd_genes_gener(gen* d_gens_val, curandState* rand_state, int ge
  * @brief       Функция cudaPopgener(...) инициализирует генерацию хромосом в начальной
  *              популяции. Каждая хромосома инициализируется в отдельном t.x + b.x потоке.
  *
- * @param[in]   d_pop указатель на начальную популяцию;
- * @param[in]   d_gens_val указатель на область решений;
- * @param[in]   rand_state указатель на псевдослучайную последовательность.
+ * @param[in]   d_pop -- указатель на начальную популяцию;
+ * @param[in]   d_gens_val -- указатель на область решений;
+ * @param[in]   rand_state -- указатель на псевдослучайную последовательность.
  */
 __global__ void cudaPopgener(population* d_pop, gen* d_gens_val, curandState* rand_state)
 {
@@ -82,7 +82,7 @@ __global__ void cudaPopgener(population* d_pop, gen* d_gens_val, curandState* ra
  * @brief       Функция cudaFitness(...) запускается t*b потоках. В каждом потоке определятся индекс
  *              соответствующей хромосомы, у которой, вызывается fitness().
  *
- * @param[in]   d_pop популяция, для хромосом которой требуется вычислить значение приспособленности.
+ * @param[in]   d_pop -- популяция, для хромосом которой требуется вычислить значение приспособленности.
  */
 __global__ void cudaFitness(population* d_pop)
 {
@@ -91,6 +91,13 @@ __global__ void cudaFitness(population* d_pop)
     d_pop->parents[index].fitness();
 }
 
+/**
+ * @brief       Функция cudaCrossover(...) запускается t*b потоках, шде в каждом потоке происходит вызов
+ *              оператора кроссинговера в популяции -- d_pop->popcross(...).
+ * 
+ * @param[in]   d_pop -- популяция, внутри которой необходимо выполнить скрещивание хромосом;
+ * @param[in]   rand_state -- указателбя на псевдослучайную последовательность.
+ */
 __global__ void cudaCrossover(population* d_pop, curandState* rand_state)
 {
     int index = threadIdx.x + blockIdx.x * blockDim.x;
@@ -100,12 +107,31 @@ __global__ void cudaCrossover(population* d_pop, curandState* rand_state)
     d_pop->popcross(&local_rand_state, index);
 }
 
+/**
+ * @brief       Функция cudaMutation(...) запускается в t*b потоках, где в каждом потоке, с заданной
+ *              вероятностью (mutation_probability), может пройзойти мутация хромосомы. В каждом потоке 
+ *              обрабатывается соответствующая потоку хромосома.
+ * 
+ * @param[in]   d_pop -- указатель на популяцию;
+ * @param[in]   rand_state  -- указатель на псевдослучайную последовательность;
+ * @param[in]   mutation_probability -- вероятность мутации хромосомы;
+ */
+__global__ void cudaMutation(population* d_pop, curandState* rand_state, double mutation_probability)
+{
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    if (index >= d_pop->population_size) { return; }
+    curand_init(1984, index, 0, &rand_state[index]);
+    curandState local_rand_state = rand_state[index];
+    if (curand_uniform_double(&local_rand_state) <= mutation_probability) { return; }
+    d_pop->parents[index].mutation(&local_rand_state);
+}
+
 int main()
 {
     /**
-     * @param   GENS_COUNT размер доступной области решения задачи (количество городов);
-     * @param   POPULATION_SIZE размер популяции (кол-во решений или хромосом в популяции);
-     * @param   MAX_ITERACTION_LIMIT лимит иттераций алгоритма gatsp.
+     * @param   GENS_COUNT -- размер доступной области решения задачи (количество городов);
+     * @param   POPULATION_SIZE --  размер популяции (кол-во решений или хромосом в популяции);
+     * @param   MAX_ITERACTION_LIMIT -- лимит иттераций алгоритма gatsp.
      */
     int GENS_COUNT = 5,
         POPULATION_SIZE = 4,
@@ -139,6 +165,8 @@ int main()
 
     //  Инициализация псевдослучайной последовательность для оператора кроссинговера;
     curandState* d_rand_state3;
+
+    curandState* d_rand_state4;
 
     // Формируем начальную популяцию.
     d_pop->parents = d_chroms;
@@ -186,9 +214,17 @@ int main()
 
         std::cerr << "Start crossover.\n";
         d_pop->new_population_size = d_pop->population_size * d_pop->population_size;
-        checkCudaErrors(cudaMallocManaged((void**)&d_rand_state3, d_pop->new_population_size*sizeof(curandState)));
+        checkCudaErrors(cudaMalloc((void**)&d_rand_state3, d_pop->new_population_size*sizeof(curandState)));
         blocksPerGrid = (d_pop ->new_population_size + threadsPerBlocks - 1) / threadsPerBlocks;
         cudaCrossover<<<blocksPerGrid, threadsPerBlocks>>>(d_pop, d_rand_state3);
+        checkCudaErrors(cudaGetLastError());
+        checkCudaErrors(cudaDeviceSynchronize());
+
+        result_output(d_pop);
+
+        std::cerr << "Start mutation.\n";
+        checkCudaErrors(cudaMalloc((void**)&d_rand_state4, d_pop->population_size*sizeof(curandState)));
+        cudaMutation<<<blocksPerGrid, threadsPerBlocks>>>(d_pop, d_rand_state4, MUTATION_PROBABILITY);
         checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
     }
@@ -209,5 +245,6 @@ int main()
     checkCudaErrors(cudaFree(d_rand_state));
     checkCudaErrors(cudaFree(d_rand_state2));
     checkCudaErrors(cudaFree(d_rand_state3));
+    checkCudaErrors(cudaFree(d_rand_state4));
     cudaDeviceReset();
 }

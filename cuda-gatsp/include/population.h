@@ -85,9 +85,7 @@ public:
         int total_fit = 0, new_size = 0;
         for (int chrom = 0; chrom < population_size; ++chrom) { total_fit += parents[chrom].get_fit(); }
         for (int chrom = 0; chrom < population_size; ++chrom) { parents[chrom].sel_probability = parents[chrom].get_fit() / total_fit; }
-        for (int chrom = 0; chrom < population_size; ++chrom) {
-            if (parents[chrom].sel_probability <= probability) { new_size += 1; }
-        }
+        for (int chrom = 0; chrom < population_size; ++chrom) { if (parents[chrom].sel_probability <= probability) { new_size += 1; } }
         new_population_size = new_size;
         cudaDeviceSynchronize();
         return new_population_size;
