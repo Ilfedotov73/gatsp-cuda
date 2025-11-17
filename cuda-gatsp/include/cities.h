@@ -54,6 +54,24 @@ public:
     }
 
     /**
+     * @brief       Функция cities::mutatiоn(...) реализует двухточечную мутацию путем перестановки двух
+     *              случайных генов местами.
+     *
+     * @param[in]   local_rand_state -- указатель на псевдослучайную последовательность на __device__.
+     */
+    __device__ void mutation(curandState* local_rand_state)
+    {
+        int rand_idx1 = (int)(curand_uniform(local_rand_state) * cities_count);
+        int rand_idx2 = (int)(curand_uniform(local_rand_state) * cities_count);
+
+        for (; rand_idx1 == rand_idx2;) { rand_idx2 = (int)(curand_uniform(local_rand_state) * (cities_count - 1)); }
+
+        gen tempptr = citieslist[rand_idx1];
+        citieslist[rand_idx1] = citieslist[rand_idx2];
+        citieslist[rand_idx2] = tempptr;
+    }
+
+    /**
      * @brief       Функция fitness() устанавалиает показатель приспособленности хромосы в свойство cities::fit.
      */
     __device__ void fitness()
@@ -64,52 +82,29 @@ public:
         }
         fit = value;
     }
-
-    /**
-     * @brief       Функция cities::cudaMutatiоn(...) реализует двухточечную мутацию путем перестановки двух
-     *              случайных генов местами.
-     * 
-     * @param[in]   local_rand_state -- указатель на псевдослучайную последовательность на __device__.
-     */
-    __device__ void mutation(curandState* local_rand_state) 
-    {
-        int rand_idx1 = (int)(curand_uniform(local_rand_state)*cities_count);
-        int rand_idx2 = (int)(curand_uniform(local_rand_state)*cities_count);
-    
-        for (; rand_idx1 == rand_idx2;) { rand_idx2 += 1; }
-
-        gen tempptr = citieslist[rand_idx1];
-        citieslist[rand_idx1] = citieslist[rand_idx2];
-        citieslist[rand_idx2] = tempptr;
-    }
 };
-
 using chromosome = cities;
 
 /**
- * @brief       Функция cudaCrossover(...) реализует двухсторонний оператор кроссинговера: опередляется
- *              точки разреза в хромосоме первого и второго родителя, после чего происходит обмен генами,
- *              которые находятся между точками разреза. 
+ * @brief       Функция crossover(...) реализует оператор скрещивания, путем унаследования хромосом потомком 
+ *              от одного конретного родителя. Выбор родиделя для наследования хромосом основан на его значении
+ *              приспособленности, чем больше доля этого значения к общей приспособленности родителей, тем больше 
+ *              вероятность того, что хромосома-потомок унаследует гены от наиболее приспособленного к окружающей 
+ *              среде родителя.
+ *              
  * 
  * @param[in]   parent1 -- хромосома первого родителя;
  * @param[in]   parent2 -- хромосома второго родителя;
  * @param[in]   local_rand_state -- указатель на псевдослучайную последовательность на __device__;
  * @param[in]   chromosome_size -- размер хромосомы.
  * 
- * @details     Функция cudaCrossover(...) создает новый объект типа chromosome -- child, затем выбираются 
- *              случайные точки разреза (важно чтобы rand_point2 был строго больше, чем rand_point1), и  
- *              наконец происходит обмен генами.
- * 
  * @return      chromosome -- хромосома потомка.
  */
 __device__ inline chromosome crossover(const chromosome& parent1, const chromosome& parent2, curandState* local_rand_state) 
 {
-    chromosome child = parent1;
-    int rand_point1 = (int)(curand_uniform(local_rand_state) * child.cities_count);
-    int rand_point2 = (int)(curand_uniform(local_rand_state) * child.cities_count);
-    for (;rand_point1 >= rand_point2;) { rand_point2 += 1; }
-    for (int p = rand_point1; p < rand_point2; ++p) { child.citieslist[p] = parent2.citieslist[p]; }
-    return child;
+    double total_fit = parent1.get_fit() + parent2.get_fit();
+    if (curand_uniform_double(local_rand_state) < parent1.get_fit() / total_fit) { return parent1; }
+    else { return parent2; }
 } 
 
 #endif

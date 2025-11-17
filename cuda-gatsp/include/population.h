@@ -36,7 +36,7 @@ public:
     }
 
     /**
-     * @brief       Функция cudaPopCrossover(...) обновляет текущее состояние популяции путем генерации потомков от текущих хромосом.
+     * @brief       Функция popcross(...) обновляет текущее состояние популяции путем генерации потомков от текущих хромосом.
      *              Решение-потомок строится на основе хромосомы родителя и хромосомы потомка, которые определяются случайно, после чего
      *              вызывается функция cudaCrossover, которая разрезает хромосомы в двух точках, переворачивает и меняет местами (двухточечный
      *              оператор кроссинговера). В результате свойства population::parents будет обновлено.
@@ -46,16 +46,20 @@ public:
      */
     __device__ void popcross(curandState* local_rand_state, int curr_index)
     {
-        // Проверка на создание нового состояния требуемого размера.
-        if (new_population_size == 0 || new_parents_state == nullptr) { return; }
         chromosome parent1 = parents[(int)(curand_uniform(local_rand_state) * (population_size - 1))];
         chromosome parent2 = parents[(int)(curand_uniform(local_rand_state) * (population_size - 1))];
         new_parents_state[curr_index] = crossover(parent1, parent2, local_rand_state);
+    }
 
-        delete parents;
-        parents = new_parents_state;
-        population_size = new_population_size;
-        new_population_size = 0;
+    /**
+     * @brief       Функция popmutation(...) вызывает оператор мутации у i-ой хромосомы i-го потока.
+     * 
+     * @param[in]   local_rand_state -- указатель на псевдослучайную последовательность;
+     * @param[in]   chrom_index -- индекс i-ой хромосомы для i-го потока. 
+     */
+    __device__ void popmutation(curandState* local_rand_state, int chrom_index)
+    {
+        parents[chrom_index].mutation(local_rand_state);
     }
 
     /**
@@ -82,10 +86,10 @@ public:
      */
     __host__ int set_roul_popsize(double probability)
     {
-        int total_fit = 0, new_size = 0;
+        double total_fit = 0, new_size = 0;
         for (int chrom = 0; chrom < population_size; ++chrom) { total_fit += parents[chrom].get_fit(); }
         for (int chrom = 0; chrom < population_size; ++chrom) { parents[chrom].sel_probability = parents[chrom].get_fit() / total_fit; }
-        for (int chrom = 0; chrom < population_size; ++chrom) { if (parents[chrom].sel_probability <= probability) { new_size += 1; } }
+        for (int chrom = 0; chrom < population_size; ++chrom) { if (probability < parents[chrom].sel_probability) { new_size += 1; } }
         new_population_size = new_size;
         cudaDeviceSynchronize();
         return new_population_size;
@@ -103,7 +107,7 @@ public:
         // Проверка на создание нового состояния требуемого размера.
         if (new_population_size == 0 || new_parents_state == nullptr) { return; }
         for (int chrom = 0, i = 0; chrom < population_size && i < new_population_size; ++chrom) {
-            if (parents[chrom].sel_probability <= probability) { new_parents_state[i++] = parents[chrom]; }
+            if (probability < parents[chrom].sel_probability) { new_parents_state[i++] = parents[chrom]; }
         }
 
         // Очизаем прошлое состояние и устанаваливаем новое. 
@@ -111,6 +115,7 @@ public:
         parents = new_parents_state;
         population_size = new_population_size;
         new_population_size = 0;
+        cudaFree(new_parents_state);
     }
 };
 

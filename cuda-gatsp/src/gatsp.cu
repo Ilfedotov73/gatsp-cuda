@@ -52,7 +52,7 @@ void result_output(population* d_pop)
  * @param[in]   rand_state -- указатель на псевдослучайную последовательность;
  * @param[in]   gens_count -- количество генов в хромосоме.
  */
-__global__ void rnd_genes_gener(gen* d_gens_val, curandState* rand_state, int gens_count)
+__global__ void cudaRndGenesGener(gen* d_gens_val, curandState* rand_state, int gens_count)
 {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         curand_init(1984, 0, 0, rand_state);
@@ -122,8 +122,8 @@ __global__ void cudaMutation(population* d_pop, curandState* rand_state, double 
     if (index >= d_pop->population_size) { return; }
     curand_init(1984, index, 0, &rand_state[index]);
     curandState local_rand_state = rand_state[index];
-    if (curand_uniform_double(&local_rand_state) <= mutation_probability) { return; }
-    d_pop->parents[index].mutation(&local_rand_state);
+    if (curand_uniform_double(&local_rand_state) < mutation_probability) { return; }
+    d_pop->popmutation(&local_rand_state, index);
 }
 
 int main()
@@ -178,7 +178,7 @@ int main()
     d_pop->population_size = POPULATION_SIZE;
 
     // Формируем гены случайными значениямию.
-    rnd_genes_gener<<<1,1>>>(d_gens_val, d_rand_state, GENS_COUNT);
+    cudaRndGenesGener<<<1,1>>>(d_gens_val, d_rand_state, GENS_COUNT);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
@@ -214,14 +214,21 @@ int main()
 
         std::cerr << "Start crossover.\n";
         d_pop->new_population_size = d_pop->population_size * d_pop->population_size;
+        checkCudaErrors(cudaMallocManaged((void**)&d_pop->new_parents_state, d_pop->new_population_size * sizeof(chromosome)));
         checkCudaErrors(cudaMalloc((void**)&d_rand_state3, d_pop->new_population_size*sizeof(curandState)));
-        blocksPerGrid = (d_pop ->new_population_size + threadsPerBlocks - 1) / threadsPerBlocks;
+        blocksPerGrid = (d_pop->new_population_size + threadsPerBlocks - 1) / threadsPerBlocks;
         cudaCrossover<<<blocksPerGrid, threadsPerBlocks>>>(d_pop, d_rand_state3);
         checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
 
-        result_output(d_pop);
+        cudaFree(d_pop->parents);
+        d_pop->parents = d_pop->new_parents_state;
+        d_pop->population_size = d_pop->new_population_size;
+        d_pop->new_population_size = 0;
+        d_pop->new_parents_state = nullptr;
+        checkCudaErrors(cudaDeviceSynchronize());
 
+        result_output(d_pop);
         std::cerr << "Start mutation.\n";
         checkCudaErrors(cudaMalloc((void**)&d_rand_state4, d_pop->population_size*sizeof(curandState)));
         cudaMutation<<<blocksPerGrid, threadsPerBlocks>>>(d_pop, d_rand_state4, MUTATION_PROBABILITY);
