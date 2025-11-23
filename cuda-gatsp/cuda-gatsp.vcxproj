@@ -63,10 +63,10 @@
     </Link>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
-      <Include>
-      </Include>
       <CompileOut>$(SolutionDir)build\intermediates\$(Platform)\$(Configuration)\%(Filename)%(Extension).obj</CompileOut>
       <KeepDir>$(CudaIntDir)</KeepDir>
+      <Include>
+      </Include>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -86,14 +86,19 @@
     </Link>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
-      <Include>
-      </Include>
       <CompileOut>$(SolutionDir)build\intermediates\$(Platform)\$(Configuration)\%(Filename)%(Extension).obj</CompileOut>
       <KeepDir>$(CudaIntDir)</KeepDir>
+      <Include>
+      </Include>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <CudaCompile Include="src\gatsp.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\cuda-tspui\cuda-tspui.vcxproj">
+      <Project>{a4cff4d6-6379-6fda-068b-b5666fba80ef}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

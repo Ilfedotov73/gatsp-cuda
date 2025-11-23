@@ -1,16 +1,14 @@
 ﻿#include <curand_kernel.h>
-#include <iostream>
-#include <time.h>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 
 #include "../../cuda-tspui/include/vec2.h"
 #include "../include/city.h"
 #include "../include/cities.h"
 #include "../include/population.h"
 
-#include <cuda_runtime.h>
-#include <device_launch_parameters.h>
-
 typedef unsigned int uint32;
+typedef unsigned long long ullong;
 
 #define checkCudaErrors(val) checkCuda(val, #val, __FILE__, __LINE__)
 void checkCuda(cudaError_t result, const char* const func, const char* const file, int const line)
@@ -20,238 +18,254 @@ void checkCuda(cudaError_t result, const char* const func, const char* const fil
             file << ":" << line << " '" << func << "' \n";
         cudaDeviceReset();
         exit(99);
+
     }
 }
 
-/**
- * @brief       Функция result_output(...) выводит результирующую популяцию в выходной поток для отладки вывода.
- *              Структура вывода:
- *              chromosome_i_fit || chromosome_i_sel_probability: 
- *                  [chromosome_i_gen_0, chromosome_i_gen_1, ... , chromosome_i_gen_j]
- *
- * @param[in]   d_pop -- результирующая популяция для вывода.
- */
-void result_output(population* d_pop)
+void print_result(population* population)
 {
     std::cerr << "Result:\n";
-    for (int i = 0; i < d_pop->population_size; ++i) {
-        std::cerr << "* "; std::cout << d_pop->parents[i].get_fit() << " || " << d_pop->parents[i].sel_probability << '\n';
-        for (int j = 0; j < d_pop->parents[i].cities_count; ++j) {
-            std::cerr << "** "; std::cout << d_pop->parents[i].citieslist[j].id << ": "
-                << d_pop->parents[i].citieslist[j].get_point().x() << d_pop->parents[i].citieslist[j].get_point().y() << '\n';
+    for (int i = 0; i < population->population_size; ++i) {
+        std::cerr << "* " << "chromosome " << i << ": fitness = " << population->parents[i].get_fit() 
+            << " || " << population->parents[i].sel_probability << ".\n";
+        for (int j = 0; j < population->parents[i].cities_count; ++j) {
+            std::cerr << "** " << population->parents[i].citieslist[j].id << ".\n";
         }
     }
-    std::clog << "\rDone.\n";
 }
 
-#define RND (curand_uniform_double(rand_state))
-/**
- * @brief       Функция genes_gener(...) генерирует случайную область решения.
- *
- * @param[in]   d_gens_val -- указатель на массив генов, которые необходимо инициализировать;
- * @param[in]   rand_state -- указатель на псевдослучайную последовательность;
- * @param[in]   gens_count -- количество генов в хромосоме.
- */
-__global__ void cudaRndGenesGener(gen* d_gens_val, curandState* rand_state, int gens_count)
-{
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        curand_init(1984, 0, 0, rand_state);
-        for (int i = 0; i < gens_count; ++i) { d_gens_val[i] = gen(vec2(RND, RND), i); }
-    }
-}
+
+// CudaKernels
+//------------------------------------------------------------------------------------------------
 
 /**
  * @brief       Функция cudaPopgener(...) инициализирует генерацию хромосом в начальной
  *              популяции. Каждая хромосома инициализируется в отдельном t.x + b.x потоке.
  *
- * @param[in]   d_pop -- указатель на начальную популяцию;
- * @param[in]   d_gens_val -- указатель на область решений;
+ * @param[in]   population -- указатель на начальную популяцию;
+ * @param[in]   genes -- указатель на область решений;
  * @param[in]   rand_state -- указатель на псевдослучайную последовательность.
  */
-__global__ void cudaPopgener(population* d_pop, gen* d_gens_val, curandState* rand_state)
+__global__ void cudaPopgener(population* population, gen* genes, curandState* rand_state)
 {
     int index = threadIdx.x + blockIdx.x * blockDim.x;
-    if (index >= d_pop->population_size) { return; }
-    curand_init(1984, index, 0, &rand_state[index]);
-    curandState local_rand_state = rand_state[index];
-    gen first_gen = d_gens_val[0];
-    d_pop->popgener(d_gens_val, first_gen, &local_rand_state, index);
+    if (index >= population->population_size) { return; }
+    population->popgener(genes, genes[2], &rand_state[index], index);
 }
+
+/**
+ * @brief       Генерирует псевдослучайную последовательность на population_size потоках GPU.
+ * 
+ * @param[in]   rand_state -- указатель на псевдослучайную последовательность;
+ * @param[in]   population_size -- заданный (текущий размер) популяции;
+ * @param[in]   seed -- сид для генерации псевдослучайной последовательности, например, время.
+ */
+__global__ void randPopInit(curandState* rand_state, int population_size, ullong seed)
+{
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    if (index >= population_size) { return; }
+    curand_init(1984+index, seed, 0, &rand_state[index]);
+}
+//------------------------------------------------------------------------------------------------
 
 /**
  * @brief       Функция cudaFitness(...) запускается t*b потоках. В каждом потоке определятся индекс
  *              соответствующей хромосомы, у которой, вызывается fitness().
  *
- * @param[in]   d_pop -- популяция, для хромосом которой требуется вычислить значение приспособленности.
+ * @param[in]   population -- популяция, для хромосом которой требуется вычислить значение приспособленности.
  */
-__global__ void cudaFitness(population* d_pop)
+__global__ void cudaFitness(population* population)
 {
     int index = threadIdx.x + blockIdx.x * blockDim.x;
-    if (index >= d_pop->population_size) { return; }
-    d_pop->parents[index].fitness();
+    if (index >= population->population_size) { return; }
+    population->parents[index].fitness();
 }
 
 /**
  * @brief       Функция cudaCrossover(...) запускается t*b потоках, шде в каждом потоке происходит вызов
  *              оператора кроссинговера в популяции -- d_pop->popcross(...).
- * 
- * @param[in]   d_pop -- популяция, внутри которой необходимо выполнить скрещивание хромосом;
- * @param[in]   rand_state -- указателбя на псевдослучайную последовательность.
+ *
+ * @param[in]   population -- популяция, внутри которой необходимо выполнить скрещивание хромосом.
+ * @param[in]   parents_src -- прошлое состояние хромосом популяции;
+ * @param[in]   rand_state -- указателбя на псевдослучайную последовательность;
+ * @param[in]   old_population_size -- размер старой популции (кол-во хромосом в ней).
  */
-__global__ void cudaCrossover(population* d_pop, curandState* rand_state)
+__global__ void cudaCrossover(population* population, chromosome* parents_src, curandState* rand_state, size_t old_population_size)
 {
     int index = threadIdx.x + blockIdx.x * blockDim.x;
-    if (index >= d_pop->new_population_size) { return; }
-    curand_init(1984, index, 0, &rand_state[index]);
-    curandState local_rand_state = rand_state[index];
-    d_pop->popcross(&local_rand_state, index);
+    if (index >= population->population_size) { return; }
+    population->popcross(&rand_state[index], index, parents_src, old_population_size);
 }
 
 /**
  * @brief       Функция cudaMutation(...) запускается в t*b потоках, где в каждом потоке, с заданной
- *              вероятностью (mutation_probability), может пройзойти мутация хромосомы. В каждом потоке 
+ *              вероятностью (mutation_probability), может пройзойти мутация хромосомы. В каждом потоке
  *              обрабатывается соответствующая потоку хромосома.
- * 
- * @param[in]   d_pop -- указатель на популяцию;
+ *
+ * @param[in]   population -- указатель на популяцию;
  * @param[in]   rand_state  -- указатель на псевдослучайную последовательность;
  * @param[in]   mutation_probability -- вероятность мутации хромосомы;
  */
-__global__ void cudaMutation(population* d_pop, curandState* rand_state, double mutation_probability)
+__global__ void cudaMutation(population* population, curandState* rand_state, double mutation_probability)
 {
     int index = threadIdx.x + blockIdx.x * blockDim.x;
-    if (index >= d_pop->population_size) { return; }
-    curand_init(1984, index, 0, &rand_state[index]);
+    if (index >= population->population_size) { return; }
     curandState local_rand_state = rand_state[index];
     if (curand_uniform_double(&local_rand_state) < mutation_probability) { return; }
-    d_pop->popmutation(&local_rand_state, index);
+    population->parents[index].mutation(&local_rand_state);
+}
+
+/**
+ * @brief       Функция chromosome_malloc(...) выделяет память в размер population_size по адресу 
+ *              current_chromosome_state.
+ * 
+ * @param[in]   current_chromosome_state -- текущее состояние хромосом популяции, для которого необходимо
+ *              выделить  память;
+ * @param[in]   population_size -- размер популяции;
+ * @param[in]   genes_count -- кол-во генов в хромосоме.
+ */
+chromosome* chromosome_malloc(chromosome* current_chromosome_state, size_t population_size, int genes_count)
+{
+    // Выделяем память для текущего состояния хромосом популяции.
+    checkCudaErrors(cudaMallocManaged((void**)&current_chromosome_state, population_size * sizeof(chromosome)));
+    for (int i = 0; i < population_size; ++i) {
+        // Выделяем память для каждой хромосомы в текущем состоянии популяции.
+        current_chromosome_state[i].cities_count = genes_count;
+        checkCudaErrors(cudaMallocManaged((void**)&current_chromosome_state[i].citieslist, genes_count * sizeof(gen)));
+    }
+    return current_chromosome_state;
 }
 
 int main()
 {
-    /**
-     * @param   GENS_COUNT -- размер доступной области решения задачи (количество городов);
-     * @param   POPULATION_SIZE --  размер популяции (кол-во решений или хромосом в популяции);
-     * @param   MAX_ITERACTION_LIMIT -- лимит иттераций алгоритма gatsp.
-     */
-    int GENS_COUNT = 5,
+    int GENES_COUNT = 4,
         POPULATION_SIZE = 4,
         MAX_ITERACTION_LIMIT = 1;
 
-    /**
-     * @param MUTATION_PROBABILITY заданная вероятность мутации хромосомы;
-     */
-    double  MUTATION_PROBABILITY = 0.3;
+    int THREADS_PER_BLOCKS = 256,
+        BLOCKS_PER_GRID = (POPULATION_SIZE + THREADS_PER_BLOCKS - 1) / THREADS_PER_BLOCKS;
 
-    // Опеределение Cuda сетки.
-    int threadsPerBlocks = 256;
-    int blocksPerGrid = (POPULATION_SIZE + threadsPerBlocks - 1) / threadsPerBlocks;
+    dim3 BLOCKS(BLOCKS_PER_GRID),
+         THREADS(THREADS_PER_BLOCKS);
 
-    gen* d_gens_val;
-    checkCudaErrors(cudaMallocManaged((void**)&d_gens_val, GENS_COUNT * sizeof(gen)));
+    // Заданная вероятность для метода "рулетки".
+    double SEL_PROBABILITY = 0.25;
+    double MUTATION_PROBABILITY = 0.3;
 
-    chromosome* d_chroms;
-    checkCudaErrors(cudaMallocManaged((void**)&d_chroms, POPULATION_SIZE * sizeof(chromosome)));
-
-    population* d_pop;
-    checkCudaErrors(cudaMallocManaged((void**)&d_pop, sizeof(population)));
-
-    // Инициализируем псевдослучайную последовательность для генерации генов.
+    // Инициализпци псевдослучайной последовательности для работы с популяцией.
     curandState* d_rand_state;
-    checkCudaErrors(cudaMalloc((void**)&d_rand_state, sizeof(curandState)));
-
-    // Инициализация псевдослучайной последовательность для генерации начальной популяции.
-    curandState* d_rand_state2;
-    checkCudaErrors(cudaMalloc((void**)&d_rand_state2, POPULATION_SIZE*sizeof(curandState)));
-
-    //  Инициализация псевдослучайной последовательность для оператора кроссинговера;
-    curandState* d_rand_state3;
-
-    curandState* d_rand_state4;
-
-    // Формируем начальную популяцию.
-    d_pop->parents = d_chroms;
-    for (int i = 0; i < POPULATION_SIZE; ++i) {
-        // Выделяем унифицированную память для каждой хромосомы
-        checkCudaErrors(cudaMallocManaged((void**)&d_pop->parents[i].citieslist, GENS_COUNT*sizeof(gen)));
-        d_pop->parents[i].cities_count = GENS_COUNT;
-    }
-    d_pop->population_size = POPULATION_SIZE;
-
-    // Формируем гены случайными значениямию.
-    cudaRndGenesGener<<<1,1>>>(d_gens_val, d_rand_state, GENS_COUNT);
+    checkCudaErrors(cudaMalloc((void**)&d_rand_state, POPULATION_SIZE * sizeof(curandState)));
+    randPopInit<<<BLOCKS, THREADS>>> (d_rand_state, POPULATION_SIZE, time(NULL));
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
-    // Генерация начальной популяции.
-    std::cerr << "Generation of the initial population.\n";
-    cudaPopgener<<<blocksPerGrid, threadsPerBlocks>>>(d_pop, d_gens_val, d_rand_state2);
+    gen* d_genes;
+    checkCudaErrors(cudaMallocManaged((void**)&d_genes, GENES_COUNT * sizeof(gen)));
+    d_genes[0] = gen(vec2(55.7522, 37.6156), 0); // Москва
+    d_genes[1] = gen(vec2(55.7887, 49.1221), 1); // Казань
+    d_genes[2] = gen(vec2(54.3282, 48.3866), 2); // Ульяновск
+    d_genes[3] = gen(vec2(54.9924, 73.3686), 3); // Омск
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    // Инициализация состояний хромосом популяции.
+    chromosome** d_chromosomes_states;
+    checkCudaErrors(cudaMallocManaged((void**)&d_chromosomes_states, MAX_ITERACTION_LIMIT*5*sizeof(chromosome*)));
+    
+    // CURRENT_CHROMOSOME_STATE хранит текущее состояние хромосом популяции. 
+    // При разных состояниях CURRENT_CHROMOSOME_STATE, хромосмы попопуляции будут иметь разные значения и разный размер.
+    chromosome* CURRENT_CHROMOSOME_STATE = d_chromosomes_states[0];
+        
+    CURRENT_CHROMOSOME_STATE = chromosome_malloc(CURRENT_CHROMOSOME_STATE, POPULATION_SIZE, GENES_COUNT);
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    // OLD_CHROMOSOME_STATE хранит в себе старое состояние хромосом популяции.
+    // По умолчанию старое состояние *CHROMOSOME_STATE = текущему состоянию *CHROMOSOME_STATE.
+    chromosome* OLD_CHROMOSOME_STATE = CURRENT_CHROMOSOME_STATE;
+    size_t OLD_POPULATION_SIZE = POPULATION_SIZE;
+
+    // Инициализая начальной популяции.
+    population* d_population;
+    checkCudaErrors(cudaMallocManaged((void**)&d_population, sizeof(population)));
+    d_population->population_size = POPULATION_SIZE;
+    d_population->parents = CURRENT_CHROMOSOME_STATE;
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    // Случайное заполнение хромосом начальной популяции генами.
+    cudaPopgener<<<BLOCKS, THREADS>>>(d_population, d_genes, d_rand_state);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
-    clock_t start, stop;
+    std::cerr << "Begin population.\n";
+    print_result(d_population);
 
     // Запуск генетического алгоритма.
-    //-----------------------------------------------------------------------------------
-    std::cerr << "Start gatsp in " << threadsPerBlocks << " threads and " << blocksPerGrid << " blocks.\n";
+    //------------------------------------------------------------------------------------------------
+    std::cerr << "Start gatsp in " << THREADS_PER_BLOCKS << " threads and " << BLOCKS_PER_GRID << " blocks.\n";
 
-    start = clock();
-    for (int iter = 0; iter < MAX_ITERACTION_LIMIT; ++iter) {
-        std::cerr << "Iteration: " << iter << ".\n";
+    std::cerr << "Start fitness.\n";
+    cudaFitness<<<BLOCKS, THREADS>>>(d_population);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
 
-        std::cerr << "Start fitnress.\n";
-        cudaFitness<<<blocksPerGrid, threadsPerBlocks>>>(d_pop);
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
+    print_result(d_population);
 
-        std::cerr << "Start selection.\n";
-        double probability = std::rand() / RAND_MAX + 1.0;
-        int new_pop_size = d_pop->set_roul_popsize(probability);
-        // Выделение унифицированной памяти для нового состояния популяции.
-        checkCudaErrors(cudaMallocManaged((void**)&d_pop->new_parents_state, new_pop_size * sizeof(chromosome)));
-        // Генерируем новое состояние популяции.
-        d_pop->roul_selection(probability);
-        checkCudaErrors(cudaDeviceSynchronize());
+    std::cerr << "Start selection.\n";
+    // Установка нового размера и состояния популяции.
+    POPULATION_SIZE = d_population->roul_newpopsize(SEL_PROBABILITY);
 
-        std::cerr << "Start crossover.\n";
-        d_pop->new_population_size = d_pop->population_size * d_pop->population_size;
-        checkCudaErrors(cudaMallocManaged((void**)&d_pop->new_parents_state, d_pop->new_population_size * sizeof(chromosome)));
-        checkCudaErrors(cudaMalloc((void**)&d_rand_state3, d_pop->new_population_size*sizeof(curandState)));
-        blocksPerGrid = (d_pop->new_population_size + threadsPerBlocks - 1) / threadsPerBlocks;
-        cudaCrossover<<<blocksPerGrid, threadsPerBlocks>>>(d_pop, d_rand_state3);
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
+    ++CURRENT_CHROMOSOME_STATE;
+    // Выделение памяти для нового состояния популяции.
+    CURRENT_CHROMOSOME_STATE = chromosome_malloc(CURRENT_CHROMOSOME_STATE, POPULATION_SIZE, GENES_COUNT);
+    d_population->population_size = POPULATION_SIZE;
+    d_population->parents = CURRENT_CHROMOSOME_STATE;
+    checkCudaErrors(cudaDeviceSynchronize());
 
-        cudaFree(d_pop->parents);
-        d_pop->parents = d_pop->new_parents_state;
-        d_pop->population_size = d_pop->new_population_size;
-        d_pop->new_population_size = 0;
-        d_pop->new_parents_state = nullptr;
-        checkCudaErrors(cudaDeviceSynchronize());
+    // Отбор хромосом
+    d_population->roul_selection(SEL_PROBABILITY, OLD_CHROMOSOME_STATE, OLD_POPULATION_SIZE);
+    checkCudaErrors(cudaDeviceSynchronize());
 
-        result_output(d_pop);
-        std::cerr << "Start mutation.\n";
-        checkCudaErrors(cudaMalloc((void**)&d_rand_state4, d_pop->population_size*sizeof(curandState)));
-        cudaMutation<<<blocksPerGrid, threadsPerBlocks>>>(d_pop, d_rand_state4, MUTATION_PROBABILITY);
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
-    }
-    stop = clock();
+    print_result(d_population);
 
-    // Вывод результата.
-    result_output(d_pop);
-    //-----------------------------------------------------------------------------------
-    // Заврешение работы генетического алгоритма
+    std::cerr << "Start crossover.\n";
+    
+    OLD_CHROMOSOME_STATE = CURRENT_CHROMOSOME_STATE;
+    OLD_POPULATION_SIZE = d_population->population_size;
 
-    double timer = ((double)(stop - start)) / CLOCKS_PER_SEC;
-    std::cerr << "took " << timer << " seconds.\n";
+    POPULATION_SIZE = d_population->population_size*d_population->population_size;
 
-    // Очистка GPU.
-    checkCudaErrors(cudaFree(d_gens_val));
-    checkCudaErrors(cudaFree(d_pop->parents));
-    checkCudaErrors(cudaFree(d_pop));
-    checkCudaErrors(cudaFree(d_rand_state));
-    checkCudaErrors(cudaFree(d_rand_state2));
-    checkCudaErrors(cudaFree(d_rand_state3));
-    checkCudaErrors(cudaFree(d_rand_state4));
-    cudaDeviceReset();
+    ++CURRENT_CHROMOSOME_STATE;
+    // Выделение памяти для нового состояния популяции.
+    CURRENT_CHROMOSOME_STATE = chromosome_malloc(CURRENT_CHROMOSOME_STATE, POPULATION_SIZE, GENES_COUNT);
+    d_population->population_size = POPULATION_SIZE;
+    d_population->parents = CURRENT_CHROMOSOME_STATE;
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    cudaCrossover<<<BLOCKS, THREADS>>>(d_population, OLD_CHROMOSOME_STATE, d_rand_state, OLD_POPULATION_SIZE);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    print_result(d_population);
+
+    std::cerr << "Start mutation.\n";
+    // Выделяем псевдослучаную последовательность для популяции нового размера
+    randPopInit<<<BLOCKS, THREADS>>>(d_rand_state, POPULATION_SIZE, time(NULL));
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    cudaMutation<<<BLOCKS, THREADS>>>(d_population, d_rand_state, MUTATION_PROBABILITY);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    print_result(d_population);
+    //------------------------------------------------------------------------------------------------
+
+    // Очистка памяти
+    //------------------------------------------------------------------------------------------------
+    cudaFree(d_genes);
+    cudaFree(d_chromosomes_states[0]);
+    cudaFree(d_chromosomes_states[1]);
+    cudaFree(d_chromosomes_states[2]);
+    cudaFree(d_chromosomes_states);
+    cudaFree(d_population);
+    cudaFree(d_rand_state);
 }
