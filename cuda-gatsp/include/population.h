@@ -1,7 +1,6 @@
 ﻿#ifndef POPULATION_H
 #define POPULATION_H
 
-#include <device_functions.h>
 #include <iostream>
 #include <curand_kernel.h>
 #include "cities.h"
@@ -52,6 +51,7 @@ public:
         // deep copy
         parents[curr_index].cities_count = new_chrom.cities_count;
         parents[curr_index].sel_probability = new_chrom.sel_probability;
+        parents[curr_index].set_fit(new_chrom.get_fit());
         for (int i = 0; i < parents[curr_index].cities_count; ++i) { parents[curr_index].citieslist[i] = new_chrom.citieslist[i]; }
     }
 
@@ -82,7 +82,7 @@ public:
         double total_fit = 0, new_size = 0;
         for (int chrom = 0; chrom < population_size; ++chrom) { total_fit += parents[chrom].get_fit(); }
         for (int chrom = 0; chrom < population_size; ++chrom) { parents[chrom].sel_probability = parents[chrom].get_fit() / total_fit; }
-        for (int chrom = 0; chrom < population_size; ++chrom) { if (probability < parents[chrom].sel_probability) { new_size += 1; } }
+        for (int chrom = 0; chrom < population_size; ++chrom) { if (probability > parents[chrom].sel_probability) { new_size += 1; } }
         return new_size;
     };
 
@@ -96,7 +96,7 @@ public:
     __host__ void roul_selection(double probability, chromosome* parents_src, size_t parents_src_size)
     {
         for (int i = 0, chrom = 0; i < population_size && chrom < parents_src_size; ++chrom) {
-            if (probability < parents_src[chrom].sel_probability) { parents[i++] = parents_src[chrom]; }
+            if (probability > parents_src[chrom].sel_probability) { parents[i++] = parents_src[chrom]; }
         }
     }
 };

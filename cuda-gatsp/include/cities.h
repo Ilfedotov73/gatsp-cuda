@@ -4,7 +4,6 @@
 #include <curand_kernel.h>
 #include <device_launch_parameters.h>
 #include <cuda_runtime.h>
-#include <device_functions.h>
 
 #include <cmath>
 
@@ -23,6 +22,7 @@ public:
     __host__ __device__ cities(city* citieslist, int cities_count) : fit(-1.0), citieslist(citieslist), cities_count(cities_count), 
         sel_probability(0.0) {}
 
+    __host__ __device__ void set_fit(double val) { fit = val; }
     __host__ __device__ double get_fit() const { return fit; }
     
     /**
