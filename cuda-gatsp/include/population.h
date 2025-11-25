@@ -2,7 +2,6 @@
 #define POPULATION_H
 
 #include <iostream>
-#include <algorithm>
 #include <curand_kernel.h>
 #include "cities.h"
 #include "city.h"
@@ -12,13 +11,10 @@ class population
 private:
 public:
     chromosome* parents;
-    chromosome* new_parents_state;
     int population_size;
-    int new_population_size;
 
     __host__ __device__ population() {}
-    __host__ __device__ population(chromosome* parents, int population_size) : parents(parents), new_parents_state(nullptr), 
-        population_size(population_size), new_population_size(0) { }
+    __host__ __device__ population(chromosome* parents, int population_size) : parents(parents), population_size(population_size) { }
 
     /**
      * @brief       Функция population::popgener(...) генерирует начальную популяцию для хромососомы по 
@@ -30,7 +26,7 @@ public:
      * @param[in]   gens_count -- размер хромосомы (т.е. количество генов в ней).
      * @param[in]   curr_index -- индекс текущего потока (текущей хромосомы). 
      */
-    __device__ void popgener(const gen* genes, const gen first_gen, curandState* local_rand_state, int curr_index)
+    __device__ void popgener(gen* genes, gen first_gen, curandState* local_rand_state, int curr_index)
     {
         parents[curr_index].gengener(genes, first_gen, local_rand_state);
     }
@@ -42,28 +38,25 @@ public:
      *              оператор кроссинговера). В результате свойства population::parents будет обновлено.
      * 
      * @param[in]   local_rand_state -- указатель на псевдослучайную последовательность;
-     * @param[in]   curr_index -- индекс текущего потока.
+     * @param[in]   curr_index -- индекс текущего потока;
+     * @param[in]   parents_src -- исходная-родительская популяция;
+     * @param[in]   parents_src_size -- размер исходной-родительской популяции.
      */
-    __device__ void popcross(curandState* local_rand_state, int curr_index)
+    __device__ void popcross(curandState* local_rand_state, int curr_index, chromosome* parents_src, int parents_src_size)
     {
-        chromosome parent1 = parents[(int)(curand_uniform(local_rand_state) * (population_size - 1))];
-        chromosome parent2 = parents[(int)(curand_uniform(local_rand_state) * (population_size - 1))];
-        new_parents_state[curr_index] = crossover(parent1, parent2, local_rand_state);
+        int rand_idx1 = min((int)(curand_uniform(local_rand_state) * parents_src_size), parents_src_size - 1);
+        int rand_idx2 = min((int)(curand_uniform(local_rand_state) * parents_src_size), parents_src_size - 1);
+        chromosome new_chrom = crossover(parents_src, rand_idx1, rand_idx2, local_rand_state);
+
+        // deep copy
+        parents[curr_index].cities_count = new_chrom.cities_count;
+        parents[curr_index].sel_probability = new_chrom.sel_probability;
+        parents[curr_index].set_fit(new_chrom.get_fit());
+        for (int i = 0; i < parents[curr_index].cities_count; ++i) { parents[curr_index].citieslist[i] = new_chrom.citieslist[i]; }
     }
 
     /**
-     * @brief       Функция popmutation(...) вызывает оператор мутации у i-ой хромосомы i-го потока.
-     * 
-     * @param[in]   local_rand_state -- указатель на псевдослучайную последовательность;
-     * @param[in]   chrom_index -- индекс i-ой хромосомы для i-го потока. 
-     */
-    __device__ void popmutation(curandState* local_rand_state, int chrom_index)
-    {
-        parents[chrom_index].mutation(local_rand_state);
-    }
-
-    /**
-     * @brief       Функция set_roul_popsize(...) определяет размер нового этапа для популяции, а также устанавливает 
+     * @brief       Функция roul_newpopsize(...) определяет размер нового этапа для популяции, а также устанавливает 
      *              значение вероятность отбора для каждой хромосоы популяции на основе метода "рулетки": для каждой 
      *              хромосомы орпеделяется некоторая вероятность отбора (sel_probability) на основе значения fitness.  
      *              Чем больше значение fitness, тем большую вероятность отбора решения  в новую популяцию. Данный 
@@ -72,27 +65,25 @@ public:
      * 
      * @param[in]   probability -- вероятность попадания хромосомы в новую популяцию.
      *
-     * @details     Функция population::set_roul_popsize(...) основна на формуле \f$\frac{f_i}{\sum_{j=1}^{N}fj}\f$,
+     * @details     Функция population::roul_newpopsize(...) основна на формуле \f$\frac{f_i}{\sum_{j=1}^{N}fj}\f$,
      *              где N -- размер популяции, fi -- значение приспособленности конкретной популяции. Таким образом,
      *              формула представляет собой отношений конкретного значения fitness к общему значению fitness всей
      *              популяции.
      * 
-     *              Сначала population::set_roul_popsize(...) вычисляет значение total_fit как общее значение fitness 
+     *              Сначала population::roul_newpopsize(...) вычисляет значение total_fit как общее значение fitness 
      *              всй популяции. Далее для каждой хромосомы вычисляется вероятность попадания в новую популяцию по 
      *              формуле выше. Наконец определяется случайное число probability, которое определяет состав обновленной 
      *              популяции на основе отсортированной старой популяции по значению sel_probability. Если все прошло успешно, 
      *              то будет определн размер новой популяции, а для каждой хромосомы будет рассчитана вероятность отбора в 
      *              новую популяцию.
      */
-    __host__ int set_roul_popsize(double probability)
+    __host__ int roul_newpopsize(double probability)
     {
         double total_fit = 0, new_size = 0;
         for (int chrom = 0; chrom < population_size; ++chrom) { total_fit += parents[chrom].get_fit(); }
         for (int chrom = 0; chrom < population_size; ++chrom) { parents[chrom].sel_probability = parents[chrom].get_fit() / total_fit; }
-        for (int chrom = 0; chrom < population_size; ++chrom) { if (probability < parents[chrom].sel_probability) { new_size += 1; } }
-        new_population_size = new_size;
-        cudaDeviceSynchronize();
-        return new_population_size;
+        for (int chrom = 0; chrom < population_size; ++chrom) { if (probability > parents[chrom].sel_probability) { new_size += 1; } }
+        return new_size;
     };
 
     /**
@@ -102,20 +93,11 @@ public:
      *               
      * @param[in]   probability -- вероятность попадания хромосомы в новую популяцию.
      */
-    __host__ void roul_selection(double probability)
+    __host__ void roul_selection(double probability, chromosome* parents_src, size_t parents_src_size)
     {
-        // Проверка на создание нового состояния требуемого размера.
-        if (new_population_size == 0 || new_parents_state == nullptr) { return; }
-        for (int chrom = 0, i = 0; chrom < population_size && i < new_population_size; ++chrom) {
-            if (probability < parents[chrom].sel_probability) { new_parents_state[i++] = parents[chrom]; }
+        for (int i = 0, chrom = 0; i < population_size && chrom < parents_src_size; ++chrom) {
+            if (probability > parents_src[chrom].sel_probability) { parents[i++] = parents_src[chrom]; }
         }
-
-        // Очизаем прошлое состояние и устанаваливаем новое. 
-        cudaFree(parents);
-        parents = new_parents_state;
-        population_size = new_population_size;
-        new_population_size = 0;
-        cudaFree(new_parents_state);
     }
 };
 
