@@ -70,6 +70,8 @@ public:
         citieslist[rand_idx2] = tempptr;
     }
 
+    
+
     /**
      * @brief       Функция fitness() устанавалиает показатель приспособленности хромосы в свойство cities::fit.
      */

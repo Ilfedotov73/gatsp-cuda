@@ -1,0 +1,3 @@
+{
+    "C_Cpp.default.compilerPath": "/usr/local/cuda-13.1/bin/nvcc"
+}
